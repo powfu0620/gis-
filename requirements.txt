@@ -1,0 +1,8 @@
+streamlit
+geopandas
+pandas
+openpyxl
+langchain-core
+langchain-community
+langchain-openai
+pillow
