@@ -32,65 +32,69 @@ USER_DB_FILE = "users_db_web.json"
 
 
 # ==========================================
-# 2. 核心后端逻辑
+# 2. 核心后端逻辑 (含超强防御性颜色过滤器)
 # ==========================================
+def clean_hex_color(color_value):
+    """【核心防御】确保任何奇葩颜色文本都能转换为 openpyxl 接受的标准 Hex 字符串"""
+    if not color_value:
+        return None
+
+    color_str = str(color_value).strip().replace("#", "").lower()
+
+    # 常用商用颜色单词映射
+    color_map = {
+        "blue": "add8e6", "yellow": "ffffe0", "red": "ffc0cb",
+        "green": "e0eeee", "gray": "f5f5f5", "black": "000000", "white": "ffffff"
+    }
+    if color_str in color_map:
+        return color_map[color_str].upper()
+
+    # 如果是16进制（匹配6位或8位），只保留合法字符
+    hex_pattern = re.compile(r'^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$')
+    if hex_pattern.match(color_str):
+        return color_str.upper()
+
+    # 如果大模型吐出了带有杂质的16进制（例如 '0xff0000' 或 'ff0000ff' 之外的格式）
+    extracted = re.findall(r'[0-9a-fA-F]{6}', color_str)
+    if extracted:
+        return extracted[0].upper()
+
+    return None  # 无法识别则返回 None，坚决不传错值引发崩溃
+
+
 def apply_styles_to_excel(excel_path, style_config):
-    """【终极智能容错版】Excel 样式安全渲染"""
+    """【安全隔离版】Excel 样式安全渲染"""
     wb = load_workbook(excel_path)
     ws = wb.active
     max_row, max_col = ws.max_row, ws.max_column
-    hex_color_pattern = re.compile(r'^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$')
 
     for target in style_config.get("targets", []):
         range_type = target.get("range_type")
         specs = target.get("styles", {})
 
         font_kwargs = {}
-        if "font_name" in specs and specs["font_name"]: font_kwargs["name"] = str(specs["font_name"]).strip()
+        if "font_name" in specs and specs["font_name"]:
+            font_kwargs["name"] = str(specs["font_name"]).strip()
         if "font_size" in specs and specs["font_size"]:
             size_digits = re.findall(r'\d+', str(specs["font_size"]))
             if size_digits: font_kwargs["size"] = int(size_digits[0])
 
-        # ---- 文字颜色安全清洗 ----
-        if "font_color" in specs and specs["font_color"]:
-            color_str = str(specs["font_color"]).strip().lower()
-            # 常用颜色单词映射
-            color_map = {
-                "blue": "0000FF", "yellow": "FFFF00", "red": "FF0000",
-                "green": "008000", "gray": "808080", "black": "000000", "white": "FFFFFF"
-            }
-            if color_str in color_map:
-                clean_color = color_map[color_str]
-            else:
-                clean_color = color_str.replace("#", "")
-
-            if hex_color_pattern.match(clean_color):
-                font_kwargs["color"] = clean_color
+        # ---- 文字颜色安全过滤 ----
+        raw_font_color = specs.get("font_color")
+        cleaned_font_color = clean_hex_color(raw_font_color)
+        if cleaned_font_color:
+            font_kwargs["color"] = cleaned_font_color
 
         if "bold" in specs: font_kwargs["bold"] = bool(specs["bold"])
         if "italic" in specs: font_kwargs["italic"] = bool(specs["italic"])
         font_obj = Font(**font_kwargs) if font_kwargs else None
 
-        # ---- 💥 背景颜色安全清洗（加入常用英文单词转换，解决不染色问题） 💥 ----
+        # ---- 背景颜色安全过滤 ----
         fill_obj = None
-        if "bg_color" in specs and specs["bg_color"]:
-            color_str = str(specs["bg_color"]).strip().lower()
-
-            # 转换成适合 Excel 排版的淡雅/标准商用 hex 颜色
-            color_map = {
-                "blue": "ADD8E6",  # 浅蓝
-                "yellow": "FFFFE0",  # 浅黄
-                "red": "FFC0CB",  # 浅红（粉）
-                "green": "E0EEEE",  # 浅绿
-                "gray": "F5F5F5"  # 浅灰
-            }
-            if color_str in color_map:
-                clean_bg = color_map[color_str]
-            else:
-                clean_bg = color_str.replace("#", "")
-
-            if hex_color_pattern.match(clean_bg):
-                fill_obj = PatternFill(start_color=clean_bg, end_color=clean_bg, fill_type="solid")
+        raw_bg_color = specs.get("bg_color")
+        cleaned_bg_color = clean_hex_color(raw_bg_color)
+        if cleaned_bg_color:
+            fill_obj = PatternFill(start_color=cleaned_bg_color, end_color=cleaned_bg_color, fill_type="solid")
 
         # ---- 对齐处理 ----
         align_obj = None
@@ -99,22 +103,16 @@ def apply_styles_to_excel(excel_path, style_config):
                              "right": "right"}
             align_obj = Alignment(horizontal=align_mapping.get(specs["alignment"], "center"), vertical="center")
 
-        # ---- 💥 确定影响范围（加入模糊容错匹配，彻底解决大模型乱吐 range_type 的问题） 💥 ----
+        # ---- 确定影响范围（模糊容错匹配） ----
         cells_to_modify = []
         range_str = str(range_type).lower()
 
-        # 只要 AI 吐出的词包含 "header" 或 "head"，就认定是表头
         if "header" in range_str or "head" in range_str:
             cells_to_modify = [ws.cell(row=1, column=c) for c in range(1, max_col + 1)]
-
-        # 只要 AI 吐出的词包含 "data" 或 "body" 或 "cell"，就认定是数据行
         elif "data" in range_str or "body" in range_str or "cell" in range_str:
             cells_to_modify = [ws.cell(row=r, column=c) for r in range(2, max_row + 1) for c in range(1, max_col + 1)]
-
-        # 只要 AI 吐出的词包含 "all" 或 "table"，就全表修改
         elif "all" in range_str or "table" in range_str:
             cells_to_modify = [ws.cell(row=r, column=c) for r in range(1, max_row + 1) for c in range(1, max_col + 1)]
-
         elif "column" in range_str or "col" in range_str:
             col_name = target.get("column_name", "")
             col_idx = None
@@ -125,14 +123,16 @@ def apply_styles_to_excel(excel_path, style_config):
             if col_idx:
                 cells_to_modify = [ws.cell(row=r, column=col_idx) for r in range(2, max_row + 1)]
 
-        # 批量应用样式
+        # 批量无差别应用样式
         for cell in cells_to_modify:
             if font_obj:
                 cur = cell.font
-                cell.font = Font(name=font_kwargs.get("name", cur.name if cur else "宋体"),
-                                 size=font_kwargs.get("size", cur.size if cur else 11),
-                                 color=font_kwargs.get("color", cur.color if cur else "000000"),
-                                 bold=font_kwargs.get("bold", cur.bold if cur else False))
+                cell.font = Font(
+                    name=font_kwargs.get("name", cur.name if cur else "宋体"),
+                    size=font_kwargs.get("size", cur.size if cur else 11),
+                    color=font_kwargs.get("color", cur.color if cur else "000000"),
+                    bold=font_kwargs.get("bold", cur.bold if cur else False)
+                )
             if fill_obj: cell.fill = fill_obj
             if align_obj: cell.alignment = align_obj
 
@@ -312,8 +312,8 @@ with col_right:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                    if st.session_state.pay_unlocked:
-                        st.session_state.pay_unlocked = False
+                    # 💥 优化点：不再频繁使用强刷新机制，采用状态锁替代
+                    st.session_state.pay_unlocked = False
 
                 except Exception as ex:
                     st.error(f"系统运行崩溃: {ex}")
