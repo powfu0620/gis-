@@ -35,7 +35,7 @@ USER_DB_FILE = "users_db_web.json"
 # 2. 核心后端逻辑
 # ==========================================
 def apply_styles_to_excel(excel_path, style_config):
-    """【防御型】Excel 样式安全渲染"""
+    """【终极智能容错版】Excel 样式安全渲染"""
     wb = load_workbook(excel_path)
     ws = wb.active
     max_row, max_col = ws.max_row, ws.max_column
@@ -51,42 +51,81 @@ def apply_styles_to_excel(excel_path, style_config):
             size_digits = re.findall(r'\d+', str(specs["font_size"]))
             if size_digits: font_kwargs["size"] = int(size_digits[0])
 
+        # ---- 文字颜色安全清洗 ----
         if "font_color" in specs and specs["font_color"]:
-            clean_color = str(specs["font_color"]).replace("#", "").strip()
-            if hex_color_pattern.match(clean_color): font_kwargs["color"] = clean_color
+            color_str = str(specs["font_color"]).strip().lower()
+            # 常用颜色单词映射
+            color_map = {
+                "blue": "0000FF", "yellow": "FFFF00", "red": "FF0000",
+                "green": "008000", "gray": "808080", "black": "000000", "white": "FFFFFF"
+            }
+            if color_str in color_map:
+                clean_color = color_map[color_str]
+            else:
+                clean_color = color_str.replace("#", "")
+
+            if hex_color_pattern.match(clean_color):
+                font_kwargs["color"] = clean_color
 
         if "bold" in specs: font_kwargs["bold"] = bool(specs["bold"])
         if "italic" in specs: font_kwargs["italic"] = bool(specs["italic"])
         font_obj = Font(**font_kwargs) if font_kwargs else None
 
+        # ---- 💥 背景颜色安全清洗（加入常用英文单词转换，解决不染色问题） 💥 ----
         fill_obj = None
         if "bg_color" in specs and specs["bg_color"]:
-            clean_bg = str(specs["bg_color"]).replace("#", "").strip()
+            color_str = str(specs["bg_color"]).strip().lower()
+
+            # 转换成适合 Excel 排版的淡雅/标准商用 hex 颜色
+            color_map = {
+                "blue": "ADD8E6",  # 浅蓝
+                "yellow": "FFFFE0",  # 浅黄
+                "red": "FFC0CB",  # 浅红（粉）
+                "green": "E0EEEE",  # 浅绿
+                "gray": "F5F5F5"  # 浅灰
+            }
+            if color_str in color_map:
+                clean_bg = color_map[color_str]
+            else:
+                clean_bg = color_str.replace("#", "")
+
             if hex_color_pattern.match(clean_bg):
                 fill_obj = PatternFill(start_color=clean_bg, end_color=clean_bg, fill_type="solid")
 
+        # ---- 对齐处理 ----
         align_obj = None
         if "alignment" in specs and specs["alignment"]:
             align_mapping = {"居中": "center", "左对齐": "left", "右对齐": "right", "center": "center", "left": "left",
                              "right": "right"}
             align_obj = Alignment(horizontal=align_mapping.get(specs["alignment"], "center"), vertical="center")
 
+        # ---- 💥 确定影响范围（加入模糊容错匹配，彻底解决大模型乱吐 range_type 的问题） 💥 ----
         cells_to_modify = []
-        if range_type == "header":
+        range_str = str(range_type).lower()
+
+        # 只要 AI 吐出的词包含 "header" 或 "head"，就认定是表头
+        if "header" in range_str or "head" in range_str:
             cells_to_modify = [ws.cell(row=1, column=c) for c in range(1, max_col + 1)]
-        elif range_type == "data":
+
+        # 只要 AI 吐出的词包含 "data" 或 "body" 或 "cell"，就认定是数据行
+        elif "data" in range_str or "body" in range_str or "cell" in range_str:
             cells_to_modify = [ws.cell(row=r, column=c) for r in range(2, max_row + 1) for c in range(1, max_col + 1)]
-        elif range_type == "all":
+
+        # 只要 AI 吐出的词包含 "all" 或 "table"，就全表修改
+        elif "all" in range_str or "table" in range_str:
             cells_to_modify = [ws.cell(row=r, column=c) for r in range(1, max_row + 1) for c in range(1, max_col + 1)]
-        elif range_type == "column":
+
+        elif "column" in range_str or "col" in range_str:
             col_name = target.get("column_name", "")
             col_idx = None
             for c in range(1, max_col + 1):
                 if ws.cell(row=1, column=c).value == col_name:
                     col_idx = c
                     break
-            if col_idx: cells_to_modify = [ws.cell(row=r, column=col_idx) for r in range(2, max_row + 1)]
+            if col_idx:
+                cells_to_modify = [ws.cell(row=r, column=col_idx) for r in range(2, max_row + 1)]
 
+        # 批量应用样式
         for cell in cells_to_modify:
             if font_obj:
                 cur = cell.font
@@ -107,7 +146,14 @@ def apply_styles_to_excel(excel_path, style_config):
 def ask_ai_to_parse_instruction(user_instruction):
     """LangChain 大模型指令解析"""
     llm = ChatOpenAI(api_key=os.environ.get("DASHSCOPE_API_KEY"), base_url=BASE_URL, model=MODEL_NAME, temperature=0.0)
-    system_prompt = "你是一个精通 Excel 样式解析的 AI 助手。将用户的中文指令转化为精准的 JSON 格式，其中 targets 为数组，包含 range_type, column_name 和 styles (font_name, font_size, font_color, bg_color, bold, alignment)。不要编造颜色代码，没有提到就不输出。"
+    system_prompt = (
+        "你是一个精通 Excel 样式解析的 AI 助手。你的任务是将用户的中文指令转化为精准的 JSON 格式。\n"
+        "【严格按照以下规则输出，不要包含 markdown 标记代码块包裹】:\n"
+        "1. targets 为数组。\n"
+        "2. range_type 的可选值必须严格控制在: 'header', 'data', 'all', 'column' 之中。\n"
+        "3. styles 内部包含: font_name, font_size, font_color, bg_color, bold, alignment。\n"
+        "4. 颜色请尽量直接输出 6 位 16 进制代码（不要带#号）。如果确实无法把握，再输出标准英文颜色单词（如 red, blue）。"
+    )
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", "用户的排版修改指令是：{instruction}")])
     return (prompt_template | llm | JsonOutputParser()).invoke({"instruction": user_instruction})
@@ -216,11 +262,9 @@ with col_right:
     shp_target_path = None
     tmp_dir = "uploaded_temp"
 
-    # --- 💥 核心修复点：采用安全、兼容的多人并发目录创建逻辑 💥 ---
     if uploaded_files:
         os.makedirs(tmp_dir, exist_ok=True)
         for f in uploaded_files:
-            # 安全写入每个用户的上传文件，不再强行销毁目录
             with open(os.path.join(tmp_dir, f.name), "wb") as buffer:
                 buffer.write(f.read())
             if f.name.endswith(".shp"):
