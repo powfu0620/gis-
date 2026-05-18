@@ -2,21 +2,19 @@ import os
 import json
 import re
 import hashlib
-import shutil
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
-from PIL import Image
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_openai import ChatOpenAI
 
 # ==========================================
-# 1. 页面基本配置 (Streamlit 网页设置)
+# 1. 页面基本配置
 # ==========================================
 st.set_page_config(
     page_title="GIS AI 属性表交互排版系统",
@@ -34,10 +32,10 @@ USER_DB_FILE = "users_db_web.json"
 
 
 # ==========================================
-# 2. 核心后端逻辑 (GIS、安全着色、AI解析)
+# 2. 核心后端逻辑
 # ==========================================
 def apply_styles_to_excel(excel_path, style_config):
-    """【安全型】Excel 样式渲染函数"""
+    """【防御型】Excel 样式安全渲染"""
     wb = load_workbook(excel_path)
     ws = wb.active
     max_row, max_col = ws.max_row, ws.max_column
@@ -116,7 +114,7 @@ def ask_ai_to_parse_instruction(user_instruction):
 
 
 # ==========================================
-# 3. 会员数据库与安全验证管理
+# 3. 会员数据库与验证管理
 # ==========================================
 def load_users():
     if not os.path.exists(USER_DB_FILE): return {}
@@ -127,24 +125,20 @@ def save_users(users):
     with open(USER_DB_FILE, "w", encoding="utf-8") as f: json.dump(users, f, ensure_ascii=False, indent=4)
 
 
-# 初始化 Session 状态
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 if "current_user" not in st.session_state: st.session_state.current_user = None
 if "pay_unlocked" not in st.session_state: st.session_state.pay_unlocked = False
 
 # ==========================================
-# 4. 网页前端布局设计 (Streamlit)
+# 4. 网页前端布局
 # ==========================================
-
-# 网页大标题与产品 Banner
 st.title("🌍 GIS 属性表交互式 AI 智能排版系统")
 st.markdown("##### 结合 **LangChain 大模型** 与 **空间数据管理**，让属性表样式调整像聊天一样简单。")
 st.write("---")
 
-# 侧边栏：商业变现与账号验证中心
+# 侧边栏
 with st.sidebar:
     st.header("🔑 商业授权与用户中心")
-
     if st.session_state.logged_in:
         st.success(f"🟢 已登录会员: {st.session_state.current_user}")
         if st.button("注销账户"):
@@ -152,10 +146,8 @@ with st.sidebar:
             st.session_state.current_user = None
             st.rerun()
     else:
-        # 登录/注册切换标签页
         auth_tab1, auth_tab2 = st.tabs(["会员登录", "QQ邮箱注册"])
         users = load_users()
-
         with auth_tab1:
             login_email = st.text_input("QQ 邮箱", key="login_email")
             login_pwd = st.text_input("密码", type="password", key="login_pwd")
@@ -164,69 +156,56 @@ with st.sidebar:
                 if login_email in users and users[login_email] == hashed_p:
                     st.session_state.logged_in = True
                     st.session_state.current_user = login_email
-                    st.success("登录成功！已解锁无限次 AI 运行权限。")
                     st.rerun()
                 else:
-                    st.error("邮箱未注册或密码不正确！")
-
+                    st.error("邮箱或密码不正确！")
         with auth_tab2:
             reg_email = st.text_input("QQ 邮箱", key="reg_email")
-            reg_pwd = st.text_input("设置密码（不少于6位）", type="password", key="reg_pwd")
+            reg_pwd = st.text_input("设置密码", type="password", key="reg_pwd")
             if st.button("提交注册", use_container_width=True):
                 if not re.match(r'^[1-9][0-9]{4,10}@qq\.com$', reg_email):
                     st.error("请输入规范的 QQ 邮箱！")
                 elif len(reg_pwd) < 6:
-                    st.error("密码长度必须大于等于 6 位！")
+                    st.error("密码不能少于 6 位！")
                 elif reg_email in users:
                     st.warning("该邮箱已被注册！")
                 else:
                     users[reg_email] = hashlib.sha256(reg_pwd.encode()).hexdigest()
                     save_users(users)
-                    st.success("注册成功！请切换到登录标签页。")
+                    st.success("注册成功！请切换到登录页。")
 
-        # 游客免登录微信支付区
-        st.write("---")
-        st.markdown("<p style='text-align: center; color: gray;'>💡 懒得注册？支持免登录单次解锁：</p>",
-                    unsafe_allow_html=True)
-
-        if st.session_state.pay_unlocked:
-            st.info("🟢 已通过微信支付成功解锁单次权限！")
-            if st.button("清除单次授权"):
-                st.session_state.pay_unlocked = False
+    st.write("---")
+    st.markdown("<p style='text-align: center; color: gray;'>💡 支持免登录单次解锁：</p>", unsafe_allow_html=True)
+    if st.session_state.pay_unlocked:
+        st.info("🟢 微信支付成功，单次权限已解锁！")
+        if st.button("清除单次授权"):
+            st.session_state.pay_unlocked = False
+            st.rerun()
+    else:
+        with st.popover("🟢 微信扫码快捷支付 (￥1.00)", use_container_width=True):
+            if os.path.exists("wechat_pay.png"):
+                st.image("wechat_pay.png", width=200)
+            else:
+                st.warning("请上传 wechat_pay.png")
+            if st.button("我已支付，立即解锁", type="primary", use_container_width=True):
+                st.session_state.pay_unlocked = True
                 st.rerun()
-        else:
-            with st.popover("🟢 微信扫码快捷支付 (￥1.00)", use_container_width=True):
-                st.write("请使用微信扫描下方收款码：")
-                if os.path.exists("wechat_pay.png"):
-                    st.image("wechat_pay.png", width=200)
-                else:
-                    st.warning("未检测到收款码图片，请上传 wechat_pay.png 到代码同级目录")
-                st.markdown("<h5 style='color:red; text-align:center;'>金额：1.00 元</h5>", unsafe_allow_html=True)
-                if st.button("我已支付，立即解锁", type="primary", use_container_width=True):
-                    st.session_state.pay_unlocked = True
-                    st.toast("✔ 微信单次运行权限已解锁！")
-                    st.rerun()
 
-# 主网页区布局
+# 主界面区
 col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.subheader("🛠️ 1. 动态输入数据源")
-    # 支持用户上传任意的 SHP 相关文件组合（.shp, .shx, .dbf 等）
     uploaded_files = st.file_uploader(
-        "请选择并上传您的矢量图层文件（GIS shp数据需要同时上传 .shp, .shx, .dbf 三个文件）",
+        "请选择并上传您的矢量图层文件（GIS数据请同时拖入 .shp, .shx, .dbf 三个文件）",
         type=["shp", "shx", "dbf"],
         accept_multiple_files=True
     )
 
-    # 默认路径缺省加载（供本地测试体验）
-    default_shp_path = r"E:\实验三 空间分析二\1 矢量空间分析二\data1\地籍边界.shp"
-    use_default = st.checkbox("使用默认本地路径进行测试", value=True if not uploaded_files else False)
-
     st.write("")
     st.subheader("🤖 2. 输入 AI 交互排版口令")
     user_cmd = st.text_area(
-        "支持极度随性的中文（字号、字体、颜色背景智能联想识别）：",
+        "支持极度随性的中文：",
         value="把第一行表头背景设为高端淡蓝色，加粗，字号换成16号，全表居中",
         height=100
     )
@@ -234,27 +213,19 @@ with col_left:
 with col_right:
     st.subheader("🖥️ 3. 数据预览与 AI 运行面板")
 
-    # 路径决策
     shp_target_path = None
     tmp_dir = "uploaded_temp"
 
-    if use_default:
-        if os.path.exists(default_shp_path):
-            shp_target_path = default_shp_path
-            st.success(f"已成功挂载本地缺省图层：`地籍边界.shp`")
-        else:
-            st.error("未找到默认本地路径，请关闭勾选并手动上传文件！")
-    elif uploaded_files:
-        if os.path.exists(tmp_dir): shutil.rmtree(tmp_dir)
+    # --- 💥 核心修复点：采用安全、兼容的多人并发目录创建逻辑 💥 ---
+    if uploaded_files:
         os.makedirs(tmp_dir, exist_ok=True)
         for f in uploaded_files:
+            # 安全写入每个用户的上传文件，不再强行销毁目录
             with open(os.path.join(tmp_dir, f.name), "wb") as buffer:
                 buffer.write(f.read())
             if f.name.endswith(".shp"):
                 shp_target_path = os.path.join(tmp_dir, f.name)
-        st.success(f"已成功接收并解包网页端上传的图层资源。")
 
-    # 如果图层加载成功，先给用户展示未排版的原始数据表格
     if shp_target_path:
         try:
             gdf = gpd.read_file(shp_target_path)
@@ -262,38 +233,33 @@ with col_right:
             st.write("📊 原始属性表数据预览：")
             st.dataframe(df_raw.head(5), use_container_width=True)
         except Exception as e:
-            st.error(f"读取SHP文件失败: {e}")
+            st.error(f"读取SHP文件失败，请确保同时上传了.shp, .shx和.dbf文件！")
             shp_target_path = None
+    else:
+        st.info("💡 请在左侧上传您的 GIS 矢量数据集组合开始体验。")
 
-    # 触发运行按钮
+    # 触发按钮
     if st.button("🚀 开始验证权限并执行 AI 智能排版", type="primary", use_container_width=True):
         if not shp_target_path:
-            st.error("错误：请先上传SHP文件或勾选本地测试路径！")
+            st.error("错误：请先上传完整的 SHP 文件组合！")
         elif not user_cmd.strip():
             st.error("错误：排版口令不能为空！")
-        # 💥 权限校验拦截机制
+        # 鉴权拦截
         elif not st.session_state.logged_in and not st.session_state.pay_unlocked:
             st.error("🚫 权限验证拦截：请在左侧登录QQ邮箱会员，或者通过微信扫码单次付费解锁！")
         else:
-            # 验证通过，进入计算
-            with st.spinner("🔒 权限已解锁！正在调用 LangChain 驱动大语言模型重构您的 Excel..."):
+            with st.spinner("🔒 权限已解锁！AI 正在重构您的 Excel..."):
                 try:
                     out_excel = "web_styled_result.xlsx"
-                    # 1. 导出
                     df_raw.to_excel(out_excel, index=False)
-                    # 2. AI 解析
-                    ai_json = ask_ai_to_parse_instruction(user_cmd)
 
-                    # 在网页中展示大模型解析的中间成果
+                    ai_json = ask_ai_to_parse_instruction(user_cmd)
                     st.info("💡 **AI 智能理解大脑输出：**")
                     st.json(ai_json)
 
-                    # 3. 后端安全绘制
                     apply_styles_to_excel(out_excel, ai_json)
-
                     st.success("🎉 **AI 排版重构成功！结果已就绪。**")
 
-                    # 💥 核心功能网页化重构：将生成的文件作为下载按钮直接供用户下载弹出
                     with open(out_excel, "rb") as file:
                         st.download_button(
                             label="📥 立即点击下载并弹出已排版的属性表 Excel",
@@ -302,7 +268,6 @@ with col_right:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                    # 本次单次额度消耗，清除单次付费状态，强制下次重新验证
                     if st.session_state.pay_unlocked:
                         st.session_state.pay_unlocked = False
 
